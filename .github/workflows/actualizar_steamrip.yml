@@ -1,0 +1,38 @@
+name: Actualizar Fuente de SteamRIP
+
+on:
+  schedule:
+    # Se ejecuta todos los días a las 03:00 UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch: # Permite ejecutarlo manualmente desde la pestaña Actions
+
+jobs:
+  update-source:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Necesario para hacer commit del JSON actualizado
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ejecutar el Scraper
+        run: python scraper.py
+
+      - name: Commit y Push del JSON actualizado
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add steamrip_auto.json
+          # Solo hace commit si hay cambios
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Actualización automática de la fuente SteamRIP" && git push)
