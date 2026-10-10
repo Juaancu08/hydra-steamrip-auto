@@ -49,7 +49,7 @@ HEADERS = {
     ),
     "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": "gzip, deflate",
     "Connection":      "keep-alive",
 }
 
@@ -151,17 +151,6 @@ def obtener_catalogo(session: requests.Session) -> dict:
     resp = peticion(GAMES_LIST_URL, session)
     if resp is None:
         raise ConnectionError(f"No se pudo acceder a {GAMES_LIST_URL} después de {REINTENTOS} intentos.")
-
-    # ─── DIAGNÓSTICO TEMPORAL ─────────────────────────────────
-    print(f"    [DIAG] Código HTTP: {resp.status_code}")
-    print(f"    [DIAG] Tamaño HTML: {len(resp.text)} bytes")
-    print(f"    [DIAG] Content-Type: {resp.headers.get('Content-Type', 'desconocido')}")
-    print(f"    [DIAG] Primeros 500 caracteres del HTML:")
-    print(f"    {resp.text[:500]}")
-    print(f"    [DIAG] ¿Contiene 'az-list-item'? {'az-list-item' in resp.text}")
-    print(f"    [DIAG] ¿Contiene 'Cloudflare'? {'cloudflare' in resp.text.lower()}")
-    print(f"    [DIAG] ¿Contiene 'Just a moment'? {'just a moment' in resp.text.lower()}")
-    print(f"    ────────────────────────────────────────────\n")
 
     soup    = BeautifulSoup(resp.text, "html.parser")
     juegos  = {}
