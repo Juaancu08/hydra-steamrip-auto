@@ -303,28 +303,24 @@ def main():
                 for entrada in datos["downloads"]:
                     slug = entrada.get("slug")
                     if slug:
+                        # Limpia y normaliza la fecha al instante
+                        entrada["uploadDate"] = normalizar_fecha_iso(entrada.get("uploadDate"))
                         mapa[slug] = entrada
             print(f"   → {len(mapa)} entradas cargadas del JSON local.\n")
-        except Exception:
+        except Exception as e:
+            print(f"   ⚠ Error al leer JSON ({e}). Empezando vacío.\n")
             mapa = {}
     else:
         print("🆕 Primera ejecución: empezando con catálogo limpio.\n")
 
-    try:
-        catalogo = obtener_catalogo(session)
-    except ConnectionError as e:
-        print(f"\n🚨 Error crítico: {e}")
-        return
-
-    print(f"⚙  Procesando {len(catalogo)} juegos con {MAX_WORKERS} hilos paralelos...\n")
-    nuevos, actualizados, sin_cambios, fallidos = procesar_catalogo(catalogo, mapa, session)
-
+    # MODO RÁPIDO: Guarda inmediatamente las fechas corregidas en 1 segundo
     salida = {
         "name":      "SteamRIP (Auto)",
         "downloads": list(mapa.values()),
     }
     with open(JSON_FILE, "w", encoding="utf-8") as f:
         json.dump(salida, f, indent=2, ensure_ascii=False)
+    print("✔ Todas las fechas han sido limpiadas y guardadas.")
 
     duracion      = time.time() - tiempo_inicio
     minutos, segs = divmod(int(duracion), 60)
@@ -333,10 +329,6 @@ def main():
     print("║                  RESUMEN FINAL                      ║")
     print("╠══════════════════════════════════════════════════════╣")
     print(f"║  Total en la fuente  : {len(mapa):>5} juegos               ║")
-    print(f"║  ✅ Nuevos           : {nuevos:>5}                        ║")
-    print(f"║  🔄 Actualizados     : {actualizados:>5}                        ║")
-    print(f"║  ➖ Sin cambios      : {sin_cambios:>5}                        ║")
-    print(f"║  ❌ Fallidos         : {fallidos:>5}                        ║")
     print(f"║  ⏱  Duración total   : {minutos}m {segs:02d}s                      ║")
     print(f"║  💾 Guardado en      : {JSON_FILE:<29} ║")
     print("╚══════════════════════════════════════════════════════╝\n")
