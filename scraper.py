@@ -1,8 +1,17 @@
 """
-scraper.py — Fuente automática de SteamRIP para Hydra Launcher
-===============================================================
+scraper.py — Fuente automática de SteamRIP para Hydra Launcher (Versión Definitiva)
+===================================================================================
 Genera y mantiene actualizado un archivo JSON con todos los juegos de SteamRIP.com.
-Diseñado para ejecutarse en GitHub Actions una vez al día.
+Diseñado para ejecutarse automáticamente en GitHub Actions cada 24 horas.
+
+Características y correcciones incluidas:
+- Catálogo completo: detecta todos los juegos (~4.780) con el patrón '-free-download'.
+- Clave primaria única por slug de URL para evitar colisiones entre juegos con nombres similares.
+- Fechas 100% compatibles con Hydra: normalización estricta a ISO-8601 UTC.
+- Descompresión nativa mediante 'gzip, deflate' sin dependencias de Brotli.
+- Comparación de enlaces con hash MD5 insensible al orden.
+- Reintentos con retroceso exponencial ante errores temporales.
+- Filtrado de enlaces directos externos a SteamRIP (GoFile, MegaDB, PixelDrain, etc.).
 """
 
 import requests
@@ -25,7 +34,7 @@ GAMES_LIST_URL = "https://steamrip.com/games-list-page/"
 JSON_FILE      = "steamrip_auto.json"
 
 MAX_WORKERS = 4      # Hilos paralelos conservadores para evitar bloqueos
-REINTENTOS  = 3      # Intentos por petición fallida
+REINTENTOS  = 3      # Intentos por petición fallida antes de descartar
 PAUSA_BASE  = 1.5    # Segundos de espera inicial entre reintentos
 TIMEOUT     = 25     # Segundos máximos de espera por petición
 
@@ -47,7 +56,11 @@ HEADERS = {
 # ═══════════════════════════════════════════════════════════════════
 
 def limpiar_titulo(titulo: str) -> str:
-    """Limpieza MÍNIMA del título para presentación visual."""
+    """
+    Limpieza MÍNIMA del título para presentación visual.
+    Solo elimina 'Free Download...' y 'Build XXXXX' para no alterar
+    nombres reales, versiones o subtítulos.
+    """
     titulo = re.sub(r'\s*Free\s+Download.*$', '', titulo, flags=re.IGNORECASE)
     titulo = re.sub(r'\s*Build\s+\d+\s*$',   '', titulo, flags=re.IGNORECASE)
     return titulo.strip()
@@ -64,7 +77,7 @@ def slug_desde_url(url: str) -> str:
 
 
 def huella_uris(uris: list) -> str:
-    """Genera un hash MD5 ordenado para comparar enlaces."""
+    """Genera un hash MD5 ordenado para comparar enlaces sin importar su orden."""
     hashes = sorted(hashlib.md5(u.strip().lower().encode()).hexdigest() for u in uris)
     return hashlib.md5("|".join(hashes).encode()).hexdigest()
 
@@ -73,7 +86,7 @@ def normalizar_fecha_iso(fecha_candidata: str | None) -> str:
     """Garantiza que la fecha sea estrictamente una cadena ISO-8601 válida."""
     if fecha_candidata:
         try:
-            limpia = fecha_candidata.replace("Z", "+00:00")
+            limpia = str(fecha_candidata).replace("Z", "+00:00")
             dt = datetime.fromisoformat(limpia)
             return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         except Exception:
@@ -164,7 +177,7 @@ def extraer_metadatos(soup: BeautifulSoup) -> dict:
         elif "developer" in etiqueta:
             meta["developer"] = valor
 
-    # La fecha de publicación real de WordPress SIEMPRE está en la etiqueta <time>
+    # La fecha real del artículo en WordPress siempre está en <time>
     time_tag = soup.find("time", {"datetime": True})
     if time_tag:
         meta["releaseDate"] = time_tag["datetime"]
@@ -265,6 +278,8 @@ def procesar_catalogo(catalogo: dict, mapa: dict, session: requests.Session) -> 
                     entrada[campo] = meta[campo]
 
             if slug in mapa:
+                # Asegurar que siempre se actualiza a fecha ISO válida
+                mapa[slug]["uploadDate"] = fecha
                 if huella_uris(mapa[slug].get("uris", [])) != huella_uris(enlaces):
                     print(f"{prefijo} 🔄 ACTUALIZADO {titulo[:53]}")
                     mapa[slug].update(entrada)
@@ -294,6 +309,7 @@ def main():
 
     mapa = {}
 
+    # 1. Cargar datos previos y normalizar fechas existentes
     if os.path.exists(JSON_FILE):
         print(f"📂 Cargando datos previos desde {JSON_FILE}...")
         try:
@@ -303,7 +319,6 @@ def main():
                 for entrada in datos["downloads"]:
                     slug = entrada.get("slug")
                     if slug:
-                        # Limpia y normaliza la fecha al instante
                         entrada["uploadDate"] = normalizar_fecha_iso(entrada.get("uploadDate"))
                         mapa[slug] = entrada
             print(f"   → {len(mapa)} entradas cargadas del JSON local.\n")
@@ -313,22 +328,37 @@ def main():
     else:
         print("🆕 Primera ejecución: empezando con catálogo limpio.\n")
 
-    # MODO RÁPIDO: Guarda inmediatamente las fechas corregidas en 1 segundo
+    # 2. Obtener catálogo completo
+    try:
+        catalogo = obtener_catalogo(session)
+    except ConnectionError as e:
+        print(f"\n🚨 Error crítico: {e}")
+        return
+
+    # 3. Procesar catálogo en paralelo
+    print(f"⚙  Procesando {len(catalogo)} juegos con {MAX_WORKERS} hilos paralelos...\n")
+    nuevos, actualizados, sin_cambios, fallidos = procesar_catalogo(catalogo, mapa, session)
+
+    # 4. Guardar archivo final
     salida = {
         "name":      "SteamRIP (Auto)",
         "downloads": list(mapa.values()),
     }
     with open(JSON_FILE, "w", encoding="utf-8") as f:
         json.dump(salida, f, indent=2, ensure_ascii=False)
-    print("✔ Todas las fechas han sido limpiadas y guardadas.")
 
     duracion      = time.time() - tiempo_inicio
     minutos, segs = divmod(int(duracion), 60)
 
+    # 5. Resumen final
     print("\n╔══════════════════════════════════════════════════════╗")
     print("║                  RESUMEN FINAL                      ║")
     print("╠══════════════════════════════════════════════════════╣")
     print(f"║  Total en la fuente  : {len(mapa):>5} juegos               ║")
+    print(f"║  ✅ Nuevos           : {nuevos:>5}                        ║")
+    print(f"║  🔄 Actualizados     : {actualizados:>5}                        ║")
+    print(f"║  ➖ Sin cambios      : {sin_cambios:>5}                        ║")
+    print(f"║  ❌ Fallidos         : {fallidos:>5}                        ║")
     print(f"║  ⏱  Duración total   : {minutos}m {segs:02d}s                      ║")
     print(f"║  💾 Guardado en      : {JSON_FILE:<29} ║")
     print("╚══════════════════════════════════════════════════════╝\n")
