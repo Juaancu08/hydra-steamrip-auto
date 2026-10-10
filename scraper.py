@@ -3,11 +3,6 @@ scraper.py — Fuente automática de SteamRIP para Hydra Launcher
 ===============================================================
 Genera y mantiene actualizado un archivo JSON con todos los juegos de SteamRIP.com.
 Diseñado para ejecutarse en GitHub Actions una vez al día.
-
-Correcciones clave:
-- Detecta todos los juegos con patrón '-free-download' (incluyendo sufijos como '-e1/', '-j1/', etc.)
-- Corrige uploadDate para no capturar el nombre del cracker (ej: Mr_GOLDBERG)
-- Descompresión nativa mediante 'gzip, deflate' sin dependencias externas
 """
 
 import requests
@@ -52,11 +47,7 @@ HEADERS = {
 # ═══════════════════════════════════════════════════════════════════
 
 def limpiar_titulo(titulo: str) -> str:
-    """
-    Limpieza MÍNIMA del título para presentación visual.
-    Solo elimina 'Free Download...' y 'Build XXXXX' para no alterar
-    nombres reales, versiones o subtítulos.
-    """
+    """Limpieza MÍNIMA del título para presentación visual."""
     titulo = re.sub(r'\s*Free\s+Download.*$', '', titulo, flags=re.IGNORECASE)
     titulo = re.sub(r'\s*Build\s+\d+\s*$',   '', titulo, flags=re.IGNORECASE)
     return titulo.strip()
@@ -76,6 +67,18 @@ def huella_uris(uris: list) -> str:
     """Genera un hash MD5 ordenado para comparar enlaces."""
     hashes = sorted(hashlib.md5(u.strip().lower().encode()).hexdigest() for u in uris)
     return hashlib.md5("|".join(hashes).encode()).hexdigest()
+
+
+def normalizar_fecha_iso(fecha_candidata: str | None) -> str:
+    """Garantiza que la fecha sea estrictamente una cadena ISO-8601 válida."""
+    if fecha_candidata:
+        try:
+            limpia = fecha_candidata.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(limpia)
+            return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        except Exception:
+            pass
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def peticion(url: str, session: requests.Session) -> requests.Response | None:
@@ -119,7 +122,6 @@ def obtener_catalogo(session: requests.Session) -> dict:
         href  = a["href"]
         texto = a.get_text(strip=True)
 
-        # Captura todos los juegos que contengan '-free-download' (incluye sufijos como '-e1/', etc.)
         if "-free-download" not in href:
             continue
         if not texto or "Free Download" not in texto:
@@ -161,11 +163,8 @@ def extraer_metadatos(soup: BeautifulSoup) -> dict:
             meta["genre"] = valor
         elif "developer" in etiqueta:
             meta["developer"] = valor
-        # Solo capturamos fechas si contiene explícitamente 'date' (evita capturar el cracker en 'Release:')
-        elif "date" in etiqueta:
-            meta["releaseDate"] = valor
 
-    # Preferir siempre la fecha ISO de la etiqueta <time> si existe
+    # La fecha de publicación real de WordPress SIEMPRE está en la etiqueta <time>
     time_tag = soup.find("time", {"datetime": True})
     if time_tag:
         meta["releaseDate"] = time_tag["datetime"]
@@ -250,9 +249,8 @@ def procesar_catalogo(catalogo: dict, mapa: dict, session: requests.Session) -> 
             if not titulo:
                 titulo = slug
 
-            # Fecha garantizada en formato ISO
-            fecha = meta.get("releaseDate") or \
-                    datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            # Fecha garantizada en formato ISO-8601 estricto
+            fecha = normalizar_fecha_iso(meta.get("releaseDate"))
 
             entrada = {
                 "title":      titulo,
